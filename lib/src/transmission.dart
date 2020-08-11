@@ -55,7 +55,7 @@ class Transmission {
   }
 
   /// Documentation about the API at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
-  /// [baseUrl] url of the transmission server instance
+  /// [baseUrl] url of the transmission server instance, default to http://localhost:9091/transmission/rpc
   /// [enableLog] boolean to show http logs or not
   factory Transmission({String baseUrl, bool enableLog = false}) {
     baseUrl ??= 'http://localhost:9091/transmission/rpc';

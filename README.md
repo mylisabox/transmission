@@ -1,6 +1,6 @@
 # transmission
 
-Dart package to talk to a Transmission torrent instance
+Dart package to talk to a Transmission torrent instance, for a flutter package including UI widget please check [transmission](https://github.com/mylisabox/flutter_transmission)
 
 ## Getting Started
 
