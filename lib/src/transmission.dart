@@ -21,10 +21,11 @@ const methodVerifyTorrent = 'torrent-verify';
 /// Documentation about the API at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
 class Transmission {
   final bool enableLog;
+  final bool proxified;
   final Dio _dio;
   final Dio _tokenDio = Dio();
 
-  Transmission._(this._dio, this.enableLog) {
+  Transmission._(this._dio, this.proxified, this.enableLog) {
     _tokenDio.options = _dio.options;
     String csrfToken;
     if (enableLog) {
@@ -37,7 +38,7 @@ class Transmission {
       options.headers[csrfProtectionHeader] = csrfToken;
       return options;
     }, onError: (DioError error) {
-      if (error.response?.statusCode == 409) {
+      if (error.response.statusCode == 409) {
         RequestOptions options = error.response.request;
         // If the token has been updated, repeat directly.
         if (csrfToken != options.headers[csrfProtectionHeader]) {
@@ -56,10 +57,11 @@ class Transmission {
 
   /// Documentation about the API at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// [baseUrl] url of the transmission server instance, default to http://localhost:9091/transmission/rpc
+  /// [proxyUrl] url use as a proxy, urls will be added at the end before request, default to null
   /// [enableLog] boolean to show http logs or not
-  factory Transmission({String baseUrl, bool enableLog = false}) {
+  factory Transmission({String baseUrl, String proxyUrl, bool enableLog = false}) {
     baseUrl ??= 'http://localhost:9091/transmission/rpc';
-    return Transmission._(Dio(BaseOptions(baseUrl: baseUrl)), enableLog);
+    return Transmission._(Dio(BaseOptions(baseUrl: proxyUrl == null ? baseUrl: proxyUrl+Uri.encodeComponent(baseUrl))), proxyUrl != null, enableLog);
   }
 
   /// close all connexions
