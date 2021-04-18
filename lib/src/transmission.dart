@@ -17,6 +17,27 @@ const methodStopTorrent = 'torrent-stop';
 const methodUpdateTorrent = 'torrent-reannounce';
 const methodVerifyTorrent = 'torrent-verify';
 
+extension RequestOptionsExtension on RequestOptions {
+  Options toOptions() {
+    return Options(
+      responseType: responseType,
+      receiveTimeout: receiveTimeout,
+      sendTimeout: sendTimeout,
+      contentType: contentType,
+      extra: extra,
+      followRedirects: followRedirects,
+      headers: headers,
+      listFormat: listFormat,
+      maxRedirects: maxRedirects,
+      method: method,
+      receiveDataWhenStatusError: receiveDataWhenStatusError,
+      requestEncoder: requestEncoder,
+      responseDecoder: responseDecoder,
+      validateStatus: validateStatus,
+    );
+  }
+}
+
 /// Transmission object to interact with a remote instance
 /// Documentation about the API at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
 class Transmission {
@@ -27,31 +48,54 @@ class Transmission {
 
   Transmission._(this._dio, this.proxified, this.enableLog) {
     _tokenDio.options = _dio.options;
-    String csrfToken;
+    String? csrfToken;
     if (enableLog) {
       _dio.interceptors.add(LogInterceptor(
         requestBody: true,
         responseBody: true,
       ));
     }
-    _dio.interceptors.add(InterceptorsWrapper(onRequest: (RequestOptions options) async {
-      options.headers[csrfProtectionHeader] = csrfToken;
-      return options;
-    }, onError: (DioError error) {
-      if (error.response.statusCode == 409) {
-        RequestOptions options = error.response.request;
+    _dio.interceptors.add(
+        InterceptorsWrapper(onRequest: (RequestOptions options, handler) async {
+      if (csrfToken != null) {
+        options.headers[csrfProtectionHeader] = csrfToken;
+      }
+      handler.next(options);
+    }, onError: (DioError error, handler) async {
+      if (error.response?.statusCode == 409) {
+        _dio.lock();
+        final options = error.requestOptions;
         // If the token has been updated, repeat directly.
         if (csrfToken != options.headers[csrfProtectionHeader]) {
           options.headers[csrfProtectionHeader] = csrfToken;
-          //repeat
-          return _dio.request(options.path, options: options);
         } else {
-          csrfToken = error.response.headers[csrfProtectionHeader].first;
+          csrfToken = error.response!.headers[csrfProtectionHeader]!.first;
           options.headers[csrfProtectionHeader] = csrfToken;
-          return _dio.request(options.path, options: options);
         }
+        //repeat
+        try {
+          final response = await _tokenDio.request(
+            options.path,
+            options: options.toOptions(),
+            data: options.data,
+            cancelToken: options.cancelToken,
+            onReceiveProgress: options.onReceiveProgress,
+            onSendProgress: options.onSendProgress,
+            queryParameters: options.queryParameters,
+          );
+          _dio.unlock();
+          handler.resolve(response);
+        } on DioError catch (err) {
+          _dio.unlock();
+          handler.reject(err);
+        } catch (err) {
+          print(err);
+          _dio.unlock();
+          handler.reject(error);
+        }
+        return;
       }
-      return error;
+      handler.next(error);
     }));
   }
 
@@ -59,9 +103,16 @@ class Transmission {
   /// [baseUrl] url of the transmission server instance, default to http://localhost:9091/transmission/rpc
   /// [proxyUrl] url use as a proxy, urls will be added at the end before request, default to null
   /// [enableLog] boolean to show http logs or not
-  factory Transmission({String baseUrl, String proxyUrl, bool enableLog = false}) {
+  factory Transmission(
+      {String? baseUrl, String? proxyUrl, bool enableLog = false}) {
     baseUrl ??= 'http://localhost:9091/transmission/rpc';
-    return Transmission._(Dio(BaseOptions(baseUrl: proxyUrl == null ? baseUrl: proxyUrl+Uri.encodeComponent(baseUrl))), proxyUrl != null, enableLog);
+    return Transmission._(
+        Dio(BaseOptions(
+            baseUrl: proxyUrl == null
+                ? baseUrl
+                : proxyUrl + Uri.encodeComponent(baseUrl))),
+        proxyUrl != null,
+        enableLog);
   }
 
   /// close all connexions
@@ -112,8 +163,8 @@ class Transmission {
   /// Throws [TransmissionException] if errors
   Future<void> renameTorrent(
     int id, {
-    String name,
-    String path,
+    String? name,
+    String? path,
   }) async {
     final results = await _dio.post('/',
         data: _Request(methodRenameTorrent, arguments: {
@@ -133,11 +184,11 @@ class Transmission {
   /// Returns [TorrentLight] light torrent info if added successfully
   /// Throws [AddTorrentException] if errors
   Future<TorrentLight> addTorrent({
-    String filename,
-    String metaInfo,
-    String downloadDir,
-    String cookies,
-    bool paused,
+    String? filename,
+    String? metaInfo,
+    String? downloadDir,
+    String? cookies,
+    bool? paused,
   }) async {
     final results = await _dio.post('/',
         data: _Request(methodAddTorrent, arguments: {
@@ -149,13 +200,16 @@ class Transmission {
         }).toJSON());
     final response = _Response.fromJSON(results.data);
     if (response.isSuccess) {
-      if (response.arguments['torrent-duplicate'] != null) {
-        throw AddTorrentException._(response.copyWith(result: 'Torrent duplicated'), TorrentLight._(response.arguments['torrent-duplicate']));
+      if (response.arguments!['torrent-duplicate'] != null) {
+        throw AddTorrentException._(
+            response.copyWith(result: 'Torrent duplicated'),
+            TorrentLight._(response.arguments!['torrent-duplicate']));
       } else {
-        return TorrentLight._(response.arguments['torrent-added']);
+        return TorrentLight._(response.arguments!['torrent-added']);
       }
     } else {
-      throw AddTorrentException._(response, TorrentLight._(response.arguments['torrent-duplicate']));
+      throw AddTorrentException._(
+          response, TorrentLight._(response.arguments!['torrent-duplicate']));
     }
   }
 
@@ -255,10 +309,13 @@ class Transmission {
         }).toJSON());
     final response = _Response.fromJSON(results.data);
     _checkResults(response);
-    final torrentsData = response.arguments['torrents'];
-    final torrentsRemoved = response.arguments['removed'];
+    final torrentsData = response.arguments!['torrents'];
+    final torrentsRemoved = response.arguments!['removed'];
     return RecentlyActiveTorrent(
-      torrentsData.map((data) => Torrent._(data)).cast<Torrent>().toList(growable: false),
+      torrentsData
+          .map((data) => Torrent._(data))
+          .cast<Torrent>()
+          .toList(growable: false),
       torrentsRemoved?.cast<int>(),
     );
   }
@@ -267,7 +324,7 @@ class Transmission {
   /// [fields] to retrieve, can be checked at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// Returns list of [Torrent] currently in transmission instance
   /// Throws [TransmissionException] if errors
-  Future<List<Torrent>> getTorrents({
+  Future<List<Torrent>?> getTorrents({
     List<String> fields = const [
       'id',
       'name',
@@ -297,15 +354,18 @@ class Transmission {
         }).toJSON());
     final response = _Response.fromJSON(results.data);
     _checkResults(response);
-    final torrentsData = response.arguments['torrents'];
-    return torrentsData.map((data) => Torrent._(data)).cast<Torrent>().toList(growable: false);
+    final torrentsData = response.arguments!['torrents'];
+    return torrentsData
+        .map((data) => Torrent._(data))
+        .cast<Torrent>()
+        .toList(growable: false);
   }
 
   /// Get data session, fields can be provided to get only needed information
   /// [fields] to retrieve, can be checked at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// Returns [Map] of the session's data
   /// Throws [TransmissionException] if errors
-  Future<Map<String, dynamic>> getSession({
+  Future<Map<String, dynamic>?> getSession({
     List<String> fields = const [
       'alt-speed-enabled',
       'speed-limit-down-enabled',
@@ -331,15 +391,16 @@ class Transmission {
   /// [fields] to set, can be checked at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// Throws [TransmissionException] if errors
   Future<void> setSession(Map<String, dynamic> fields) async {
-    final results = await _dio.post('/', data: _Request(methodSetSession, arguments: fields).toJSON());
+    final results = await _dio.post('/',
+        data: _Request(methodSetSession, arguments: fields).toJSON());
     final response = _Response.fromJSON(results.data);
     _checkResults(response);
   }
 }
 
 class RecentlyActiveTorrent {
-  final List<Torrent> torrents;
-  final List<int> removed;
+  final List<Torrent>? torrents;
+  final List<int>? removed;
 
   RecentlyActiveTorrent(this.torrents, this.removed);
 
@@ -372,15 +433,15 @@ class TransmissionException {
 }
 
 class TorrentLight {
-  final Map<String, dynamic> _rawData;
+  final Map<String, dynamic>? _rawData;
 
   TorrentLight._(this._rawData);
 
-  int get id => _rawData['id'];
+  int? get id => _rawData!['id'];
 
-  String get name => _rawData['name'];
+  String? get name => _rawData!['name'];
 
-  String get hash => _rawData['hashString'];
+  String? get hash => _rawData!['hashString'];
 
   @override
   String toString() {
@@ -395,27 +456,27 @@ class Torrent {
 
   Map<String, dynamic> get rawData => _rawData;
 
-  int get id => _rawData['id'];
+  int? get id => _rawData['id'];
 
-  String get name => _rawData['name'];
+  String? get name => _rawData['name'];
 
-  String get hash => _rawData['hashString'];
+  String? get hash => _rawData['hashString'];
 
-  String get downloadDir => _rawData['downloadDir'];
+  String? get downloadDir => _rawData['downloadDir'];
 
-  int get error => _rawData['error'];
+  int? get error => _rawData['error'];
 
-  String get errorString => _rawData['errorString'];
+  String? get errorString => _rawData['errorString'];
 
-  bool get isFinished => _rawData['isFinished'];
+  bool? get isFinished => _rawData['isFinished'];
 
-  bool get isStalled => _rawData['isStalled'];
+  bool? get isStalled => _rawData['isStalled'];
 
-  int get totalSize => _rawData['totalSize'];
+  int? get totalSize => _rawData['totalSize'];
 
-  int get eta => _rawData['eta'];
+  int? get eta => _rawData['eta'];
 
-  int get status => _rawData['status'];
+  int? get status => _rawData['status'];
 
   String get statusDescription {
     if (error != 0) {
@@ -440,42 +501,44 @@ class Torrent {
     return 'Unkown';
   }
 
-  double get metadataPercentComplete => _rawData['metadataPercentComplete'] * 100.0;
+  double? get metadataPercentComplete =>
+      _rawData['metadataPercentComplete'] * 100.0;
 
-  int get sizeWhenDone => _rawData['sizeWhenDone'];
+  int? get sizeWhenDone => _rawData['sizeWhenDone'];
 
-  int get leftUntilDone => _rawData['leftUntilDone'];
+  int? get leftUntilDone => _rawData['leftUntilDone'];
 
-  int get rateUpload => _rawData['rateUpload'];
+  int? get rateUpload => _rawData['rateUpload'];
 
-  int get rateDownload => _rawData['rateDownload'];
+  int? get rateDownload => _rawData['rateDownload'];
 
-  String get prettyRateDownload => _prettySize(rateDownload, decimal: 1) + '/s';
+  String get prettyRateDownload =>
+      _prettySize(rateDownload!, decimal: 1) + '/s';
 
-  String get prettyRateUpload => _prettySize(rateUpload, decimal: 1) + '/s';
+  String get prettyRateUpload => _prettySize(rateUpload!, decimal: 1) + '/s';
 
-  int get queuePosition => _rawData['queuePosition'];
+  int? get queuePosition => _rawData['queuePosition'];
 
-  double get percentDone => _rawData['percentDone'] * 100.0;
+  double? get percentDone => _rawData['percentDone'] * 100.0;
 
   bool get isMetadataDownloaded => _rawData['metadataPercentComplete'] == 1;
 
-  int get peersSendingToUs => _rawData['peersSendingToUs'];
+  int? get peersSendingToUs => _rawData['peersSendingToUs'];
 
-  int get peersGettingFromUs => _rawData['peersGettingFromUs'];
+  int? get peersGettingFromUs => _rawData['peersGettingFromUs'];
 
-  int get peersConnected => _rawData['peersConnected'];
+  int? get peersConnected => _rawData['peersConnected'];
 
   String get prettyTotalSize {
-    return _prettySize(totalSize);
+    return _prettySize(totalSize!);
   }
 
   String get prettyLeftUntilDone {
-    return _prettySize(leftUntilDone);
+    return _prettySize(leftUntilDone!);
   }
 
   String get prettyCurrentSize {
-    return _prettySize(totalSize - leftUntilDone);
+    return _prettySize(totalSize! - leftUntilDone!);
   }
 
   String _prettySize(int sizeInOctet, {decimal = 2}) {
@@ -502,8 +565,8 @@ class Torrent {
 
 class _Request {
   final String method;
-  final Map<String, dynamic> arguments;
-  final String tag;
+  final Map<String, dynamic>? arguments;
+  final String? tag;
 
   _Request(this.method, {this.arguments, this.tag});
 
@@ -522,17 +585,18 @@ class _Request {
 }
 
 class _Response {
-  final String result;
-  final Map<String, dynamic> arguments;
-  final String tag;
+  final String? result;
+  final Map<String, dynamic>? arguments;
+  final String? tag;
 
   _Response(this.result, {this.arguments, this.tag});
 
   factory _Response.fromJSON(Map<String, dynamic> data) {
-    return _Response(data['result'], arguments: data['arguments'], tag: data['tag']);
+    return _Response(data['result'],
+        arguments: data['arguments'], tag: data['tag']);
   }
 
-  _Response copyWith({String result}) {
+  _Response copyWith({String? result}) {
     return _Response(result, arguments: arguments, tag: tag);
   }
 
