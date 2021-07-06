@@ -324,7 +324,7 @@ class Transmission {
   /// [fields] to retrieve, can be checked at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// Returns list of [Torrent] currently in transmission instance
   /// Throws [TransmissionException] if errors
-  Future<List<Torrent>?> getTorrents({
+  Future<List<Torrent>> getTorrents({
     List<String> fields = const [
       'id',
       'name',
@@ -365,7 +365,7 @@ class Transmission {
   /// [fields] to retrieve, can be checked at https://github.com/transmission/transmission/blob/master/extras/rpc-spec.txt
   /// Returns [Map] of the session's data
   /// Throws [TransmissionException] if errors
-  Future<Map<String, dynamic>?> getSession({
+  Future<Map<String, dynamic>> getSession({
     List<String> fields = const [
       'alt-speed-enabled',
       'speed-limit-down-enabled',
@@ -384,7 +384,7 @@ class Transmission {
         }).toJSON());
     final response = _Response.fromJSON(results.data);
     _checkResults(response);
-    return response.arguments;
+    return response.arguments!;
   }
 
   /// Set data session

@@ -1,3 +1,7 @@
+## [0.1.1] - 06/07/2021
+
+* fix null safety issues
+
 ## [0.1.0] - 18/04/2021
 
 * migrate to null safety
