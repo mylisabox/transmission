@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 const csrfProtectionHeader = 'X-Transmission-Session-Id';
+const basicAuthentication = 'Authorization';
+const proxyBasicAuthentication = 'Proxy-Authorization';
 
 const methodAddTorrent = 'torrent-add';
 const methodRemoveTorrent = 'torrent-remove';
@@ -104,15 +108,25 @@ class Transmission {
   /// [proxyUrl] url use as a proxy, urls will be added at the end before request, default to null
   /// [enableLog] boolean to show http logs or not
   factory Transmission(
-      {String? baseUrl, String? proxyUrl, bool enableLog = false}) {
+      {String? baseUrl,
+      String? proxyUrl,
+      bool enableLog = false,
+      String? username,
+      String? password}) {
     baseUrl ??= 'http://localhost:9091/transmission/rpc';
-    return Transmission._(
-        Dio(BaseOptions(
-            baseUrl: proxyUrl == null
-                ? baseUrl
-                : proxyUrl + Uri.encodeComponent(baseUrl))),
-        proxyUrl != null,
-        enableLog);
+    Dio client = Dio(BaseOptions(
+        baseUrl: proxyUrl == null
+            ? baseUrl
+            : proxyUrl + Uri.encodeComponent(baseUrl)));
+    if (username != null && password != null) {
+      String auth = base64.encode(utf8.encode('$username:$password'));
+      if (proxyUrl != null) {
+        client.options.headers[proxyBasicAuthentication] = 'Basic $auth';
+      } else {
+        client.options.headers[basicAuthentication] = 'Basic $auth';
+      }
+    }
+    return Transmission._(client, proxyUrl != null, enableLog);
   }
 
   /// close all connexions
